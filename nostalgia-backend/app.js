@@ -14,55 +14,80 @@ app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 app.use(morgan("dev"));
 
-// Covers (already)
-const coversDir = process.env.COVERS_DIR || "./storage/covers";
+/**
+ * Static: covers
+ */
+const coversDir = process.env.COVERS_DIR
+  ? path.resolve(process.env.COVERS_DIR)
+  : path.join(__dirname, "storage", "covers");
+
 fs.mkdirSync(coversDir, { recursive: true });
 
 app.use(
   "/covers",
-  express.static(path.resolve(coversDir), {
+  express.static(coversDir, {
     etag: true,
     maxAge: "30d",
-    immutable: true
+    immutable: true,
   })
 );
 
+/**
+ * Health
+ */
 app.get("/health", (req, res) => res.json({ ok: true }));
 
-// API
+/**
+ * API
+ */
 app.use("/api", apiRouter);
 
 /**
- * Serve UI (Vite build output copied to static/ui)
+ * Static: UI (Vite build copied to nostalgia-backend/static/ui)
+ *
+ * IMPORTANT:
+ * - Use __dirname so it works no matter where you start node from
+ * - Serve assets via express.static
+ * - SPA fallback returns index.html for non-file routes
  */
-const uiDir = process.env.UI_DIR || path.join(process.cwd(), "static", "ui");
-if (fs.existsSync(uiDir)) {
-  // Serve static assets
+const uiDir = process.env.UI_DIR
+  ? path.resolve(process.env.UI_DIR)
+  : path.join(__dirname, "static", "ui");
+
+const indexHtml = path.join(uiDir, "index.html");
+
+if (fs.existsSync(indexHtml)) {
+  // Serve UI assets (JS/CSS/images)
   app.use(
     express.static(uiDir, {
       etag: true,
-      maxAge: "1h"
+      maxAge: "1h",
     })
   );
 
-  // SPA fallback: any non-API/non-covers route -> index.html
+  // SPA fallback:
+  // - don’t interfere with /api or /covers
+  // - if request looks like a file (has a dot), let it 404 normally
   app.get("*", (req, res, next) => {
-    // allow /api and /covers to behave normally
     if (req.path.startsWith("/api") || req.path.startsWith("/covers")) return next();
+    if (req.path.includes(".")) return next(); // asset/file request
 
-    const indexHtml = path.join(uiDir, "index.html");
-    if (!fs.existsSync(indexHtml)) return next();
     res.sendFile(indexHtml);
   });
 } else {
-  console.log(`[ui] UI_DIR not found, skipping static UI serving: ${uiDir}`);
+  console.log(`[ui] index.html not found, UI not served. Expected: ${indexHtml}`);
 }
 
-// 404 + error middleware
+/**
+ * 404 + error middleware
+ */
 app.use((req, res) => res.status(404).json({ error: "Not found" }));
+
 app.use((err, req, res, next) => {
   console.error(err);
-  res.status(500).json({ error: "Server error", message: err?.message || String(err) });
+  res
+    .status(err.status || 500)
+    .json({ error: "Server error", message: err?.message || String(err) });
 });
 
 module.exports = app;
